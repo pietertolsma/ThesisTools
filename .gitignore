@@ -1,0 +1,5 @@
+.vscode/*
+totemvs_parser/*
+!*.py
+!*.sh
+.DS_Store
