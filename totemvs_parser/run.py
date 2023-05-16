@@ -5,6 +5,9 @@ import json
 import numpy as np
 import shutil
 from scipy.spatial.transform import Rotation as R
+from PIL import Image
+from collections import defaultdict
+import tqdm
 
 parser = argparse.ArgumentParser(description="Isaac raw output to DTU-like format parser")
 parser.add_argument("input_folder", help="The input folder of the raw data")
@@ -18,9 +21,31 @@ args = parser.parse_args()
 
 cameras = json.load(open(f"{args.input_folder}/cameras"))
 cam_cnt = len(cameras)
-distances = sorted([glob.glob(f"{args.input_folder}/distance_rp{i}*") for i in range(cam_cnt)])
-instances = sorted([glob.glob(f"{args.input_folder}/instance_rp{i}*") for i in range(cam_cnt)])
-images = sorted([glob.glob(f"{args.input_folder}/rp{i}*") for i in range(cam_cnt)])
+images = sorted(
+    [
+        sorted(
+            glob.glob(f"{args.input_folder}/rp{i}*"),
+            key=lambda x: int(x.split("/")[-1].split("_")[2]),
+        )
+        for i in range(cam_cnt)
+    ]
+)
+distances = sorted(
+    [sorted(glob.glob(f"{args.input_folder}/distance_rp{i}*")[: len(images[0])]) for i in range(cam_cnt)]
+)
+instances = sorted(
+    [
+        sorted(
+            glob.glob(f"{args.input_folder}/instance_rp{i}*.npy")[: len(images[0])],
+            key=lambda x: int(x.split("/")[-1].split("_")[3].split(".")[0]),
+        )
+        for i in range(cam_cnt)
+    ]
+)
+instances_meta = sorted(
+    glob.glob(f"{args.input_folder}/instance_step*.json"),
+    key=lambda x: int(x.split("/")[-1].split("_")[-1].split(".")[0]),
+)
 
 
 def create_folders():
@@ -40,47 +65,95 @@ def load_cams_if_exists():
 def create_cams():
     out = load_cams_if_exists()
 
-    for i, cam in enumerate(cameras):
+    for i in range(len(cameras)):
         cam_id = i
-        if args.offset:
-            cam_id += 3
-        position = cam["position"]
-        rotvec = cam["rotation"]
-        fx = cam["focal_x"]
+        cam = cameras[i]
+        position = np.array(cameras[i]["position"], dtype=np.float)
+        rotvec = np.array(cam["rotation"])
+        # rotvec[0] = 180
+        # the following line comes close
+        # position[0] *= -1
+        # position[1] *= 0.73
+
+        print(position)
+        # position[2] = 0=
+        # position[1] *= 0.78
+        # rotvec[1] = 90 - rotvec[1]
+        print(rotvec)
         fy = cam["focal_y"]
-        cx = cam["center_x"]
-        cy = cam["center_y"]
+        fx = cam["focal_y"]
+        cy = cam["center_x"]
+        cx = cam["center_y"]
         near = cam["near"]
         far = cam["far"]
 
         intrinsic = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
         extrinsic = np.eye(4)
-        extrinsic[:3, :3] = R.from_rotvec(rotvec).as_matrix()
-        extrinsic[:, [0, 2]] = extrinsic[:, [2, 0]]  # Swap axis
-        extrinsic[:, 0] *= -1
+        rotvec[1] += 180
+        extrinsic[:3, :3] = R.from_rotvec(rotvec, degrees=True).as_matrix()
+        # extrinsic[:, :3] = extrinsic[:, [2, 1, 0]]  # Swap axis
 
-        extrinsic[:3, 3] = np.array(position)
-
+        # position = position[[1, 0, 2]]
+        # extrinsic[:, 2] *= -1
+        # extrinsic[:3, :3] = extrinsic[:3, :3] @ R.from_rotvec([np.pi / 2, 0, 0]).as_matrix()
+        # extrinsic[:3, 2] *= -1
+        tf_mat = np.eye(4)
+        tf_mat[:3, 3] = np.array(position)
+        extrinsic = extrinsic @ tf_mat
+        # extrinsic[:3, 3] = position
         out[str(cam_id)] = {"extrinsic": extrinsic.tolist(), "intrinsic": intrinsic, "near": near, "far": far}
-    with open(f"{args.output_folder}/cams.json", "w") as f:
+    # path = "/Users/pietertolsma/Thesis/paper_code/MVSTER/data/ToteMVS/cams.json"
+    path = f"{args.output_folder}/cams.json"
+    with open(path, "w") as f:
         json.dump(out, f, indent=4)
 
 
+metas = defaultdict(dict)
+
+
 def copy_files():
-    for i in range(len(distances)):
-        for j in range(len(distances[i])):
-            dfile = distances[i][j]
+    for i in tqdm.tqdm(range(len(images))):
+        for j in range(len(images[i])):
+            # dfile = distances[i][j]
             instancefile = instances[i][j]
             imfile = images[i][j]
 
             cam_index = int(imfile.split("/")[-1].split("_")[0][2:])
-            if args.offset:
-                cam_index += 3
+            tote_index = imfile.split("/")[-1].split("_")[2]  # .split(".")[0]
+            d_min = int(imfile.split("/")[-1].split("_")[3])
+            d_max = int(imfile.split("/")[-1].split("_")[4].split(".")[0])
 
-            tote_index = imfile.split("/")[-1].split("_")[2].split(".")[0]
-            shutil.copy(dfile, f"{args.output_folder}/tote{tote_index}/depth/{cam_index}.npy")
-            shutil.copy(instancefile, f"{args.output_folder}/tote{tote_index}/instance/{cam_index}.json")
+            image = np.array(Image.open(imfile))
+            d = image[:, :, 3]
+
+            # d_min, d_max = d.min(), d.max()
+
+            metas[f"tote{tote_index}"][str(cam_index)] = {"d_min": str(d_min), "d_max": str(d_max)}
+
+            # TODO: Remove this scaling once Isaac does this.
+            # d = 255 * ((d - d_min) / (d_max - d_min))
+
+            # image[:, :, 3] = d
+            # d_im = Image.fromarray(d.astype(np.uint8), mode="L")
+
+            # rgba_img = np.concatenate((image[:, :, :3], d[:, :, None]), axis=2).astype(np.uint8)
+
+            # Image.fromarray(d.astype(np.uint8), "L").save(
+            #     f"{args.output_folder}/tote{tote_index}/depth/{cam_index}.png"
+            # )
+
+            # d_im.save(f"{args.output_folder}/tote{tote_index}/depth/{cam_index}.png")
+            # shutil.copy(dfile, f"{args.output_folder}/tote{tote_index}/depth/{cam_index}.npy")
+
+            print(f"{imfile} {instancefile} {cam_index}")
+            if i == 0:
+                metas[f"tote{tote_index}"]["labels"] = json.load(open(instances_meta[j], "r"))
+            shutil.copy(instancefile, f"{args.output_folder}/tote{tote_index}/instance/{cam_index}.npy")
             shutil.copy(imfile, f"{args.output_folder}/tote{tote_index}/{args.material}/{cam_index}.png")
+
+    for tote in metas.keys():
+        content = metas[tote]
+        json.dump(content, open(f"{args.output_folder}/{tote}/meta.json", "w"), indent=4)
 
 
 create_folders()

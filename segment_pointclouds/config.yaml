@@ -1,0 +1,19 @@
+data:
+  root: ../totemvs_parser/ToteMVS
+  material: diffuse
+  img_wh: [768, 768]
+  nviews: 6
+  depth_min: 70
+  depth_max: 200
+  thres_view: 2
+
+train:
+  split: [90, 10]
+  robust: False
+  epochs: 3000
+
+fpn:
+  levels: [0, 1, 2, 3] # in 2**x
+  base_channels: 8
+  gn: False
+  dcn: False

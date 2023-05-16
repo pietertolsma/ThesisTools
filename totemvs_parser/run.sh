@@ -1,5 +1,6 @@
 #!/bin/bash
 
-python run.py clear_set_01 ToteMVS -m transparent
-python run.py diffuse_set_01 ToteMVS -m diffuse
-python run.py specular_set_01 ToteMVS -m specular
+python run.py all_smaller ToteMVS -m diffuse
+# python run.py diff_samples ToteMVS -m diffuse -o
+# python run.py specular_samples ToteMVS -m specular -o
+# python run.py extra_cams ToteMVS -m diffuse
